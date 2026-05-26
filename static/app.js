@@ -9,6 +9,8 @@
  */
 
 (function () {
+  let currentLayout = "TB";
+
   const cy = cytoscape({
     container: document.getElementById("cy"),
     elements: [],
@@ -19,22 +21,30 @@
           "shape": "roundrectangle",
           "label": "data(short)",
           "text-wrap": "wrap",
-          "text-max-width": 140,
+          "text-max-width": 150,
           "font-size": 11,
           "color": "#0b1020",
           "background-color": "data(color)",
-          "border-color": "#0b1020",
-          "border-width": 1,
+          "border-color": "#1a1e2a",
+          "border-width": 2,
           "width": "label",
           "height": "label",
           "text-valign": "center",
           "text-halign": "center",
           "padding": "14px",
+          "transition-property": "border-color, border-width, opacity",
+          "transition-duration": "0.2s",
         },
       },
       {
         selector: "node.selected",
-        style: { "border-color": "#5b9cff", "border-width": 3 },
+        style: {
+          "border-color": "#5b9cff",
+          "border-width": 3,
+          "shadow-blur": 12,
+          "shadow-color": "rgba(91,156,255,0.3)",
+          "shadow-opacity": 1,
+        },
       },
       {
         selector: "node.highlight-topo",
@@ -45,19 +55,25 @@
         style: { "border-color": "#facc15", "border-width": 4 },
       },
       {
+        selector: "node.search-dim",
+        style: { "opacity": 0.15 },
+      },
+      {
         selector: "edge",
         style: {
           "curve-style": "bezier",
           "target-arrow-shape": "triangle",
-          "width": 1.6,
-          "opacity": 0.85,
+          "width": 2,
+          "opacity": 0.7,
           "label": "data(label)",
           "font-size": 9,
-          "color": "#9aa3b2",
+          "color": "#8b95a8",
           "text-rotation": "autorotate",
-          "text-background-color": "#0f1115",
-          "text-background-opacity": 0.6,
-          "text-background-padding": 2,
+          "text-background-color": "#0c0e13",
+          "text-background-opacity": 0.7,
+          "text-background-padding": 3,
+          "transition-property": "opacity, line-color, width",
+          "transition-duration": "0.2s",
         },
       },
       {
@@ -85,17 +101,26 @@
         style: {
           "line-color": "#facc15",
           "target-arrow-color": "#facc15",
-          "width": 3,
+          "width": 3.5,
+          "opacity": 1,
         },
       },
+      {
+        selector: "edge.search-dim",
+        style: { "opacity": 0.08 },
+      },
     ],
-    layout: { name: "dagre", rankDir: "LR" },
+    layout: { name: "dagre", rankDir: "TB" },
     wheelSensitivity: 0.2,
+    minZoom: 0.3,
+    maxZoom: 3,
   });
 
   const datasetSelect = document.getElementById("dataset-select");
   const messagesEl = document.getElementById("messages");
   const detailEl = document.getElementById("claim-detail");
+  const tooltipEl = document.getElementById("tooltip");
+  const searchInput = document.getElementById("search-input");
 
   let state = {
     claims: [],
@@ -107,16 +132,17 @@
     selectedClaim: null,
   };
 
+  // ---------- Helpers -------------------------------------------------- //
+
   function showMessage(text, kind = "ok") {
     const div = document.createElement("div");
     div.className = `msg ${kind}`;
     div.textContent = text;
     messagesEl.prepend(div);
-    setTimeout(() => div.remove(), 6000);
+    setTimeout(() => div.remove(), 5000);
   }
 
   function confidenceColor(c) {
-    // c in [-1, 1]; -1 red -> 0 yellow -> 1 green
     const stops = [
       { t: -1, rgb: [185, 28, 28] },
       { t: -0.5, rgb: [248, 113, 113] },
@@ -145,11 +171,35 @@
   }
 
   function shortLabel(text) {
-    if (text.length <= 60) return text;
-    return text.slice(0, 57) + "...";
+    if (text.length <= 55) return text;
+    return text.slice(0, 52) + "...";
+  }
+
+  function escapeHtml(s) {
+    return String(s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function formatConf(v) {
+    if (v === null || v === undefined) return "n/a";
+    const sign = v >= 0 ? "+" : "";
+    return sign + v.toFixed(2);
+  }
+
+  function claimById(id) {
+    return state.claims.find((c) => c.id === id);
+  }
+
+  function updateStats() {
+    document.getElementById("stat-claims").textContent = state.claims.length;
+    document.getElementById("stat-edges").textContent = state.edges.length;
+    document.getElementById("stat-evidence").textContent = state.evidence.length;
   }
 
   // ---------- Network -------------------------------------------------- //
+
   async function api(path, opts = {}) {
     const init = { headers: { "Content-Type": "application/json" }, ...opts };
     const res = await fetch(`/api${path}`, init);
@@ -181,25 +231,27 @@
     state.levels = data.levels || {};
     renderGraph();
     refreshFormDropdowns();
+    updateStats();
     if (state.selectedClaim && !state.claims.find((c) => c.id === state.selectedClaim)) {
       state.selectedClaim = null;
     }
     if (state.selectedClaim) {
       renderClaimDetail(state.selectedClaim);
     } else {
-      detailEl.innerHTML = `<h2>${state.claims.length} claims loaded</h2>
-        <p class="hint">Click any node in the graph to inspect it.</p>
-        <h3>Topological order (Kahn)</h3>
-        <ol class="topo-list">
-          ${state.topo
-            .map((id) => `<li>${escapeHtml(claimById(id)?.text || id)}</li>`)
-            .join("")}
-        </ol>`;
+      renderOverview();
     }
   }
 
-  function claimById(id) {
-    return state.claims.find((c) => c.id === id);
+  function renderOverview() {
+    detailEl.innerHTML = `
+      <h2>${state.claims.length} claims loaded</h2>
+      <p class="hint">Click any node in the graph to inspect it.</p>
+      <h3>Topological order (Kahn)</h3>
+      <ol class="topo-list">
+        ${state.topo
+          .map((id) => `<li>${escapeHtml(claimById(id)?.text || id)}</li>`)
+          .join("")}
+      </ol>`;
   }
 
   function renderGraph() {
@@ -211,6 +263,7 @@
           short: shortLabel(c.text),
           full: c.text,
           color: confidenceColor(conf.final),
+          conf: conf.final,
         },
       };
     });
@@ -225,9 +278,23 @@
     }));
     cy.elements().remove();
     cy.add([...nodes, ...edges]);
-    cy.layout({ name: "dagre", rankDir: "TB", nodeSep: 50, rankSep: 70 }).run();
-    cy.fit(40);
+    runLayout();
   }
+
+  function runLayout() {
+    cy.layout({
+      name: "dagre",
+      rankDir: currentLayout,
+      nodeSep: 50,
+      rankSep: 70,
+      animate: true,
+      animationDuration: 300,
+      animationEasing: "ease-in-out-cubic",
+    }).run();
+    setTimeout(() => cy.fit(50), 350);
+  }
+
+  // ---------- Claim detail --------------------------------------------- //
 
   function renderClaimDetail(claimId) {
     const claim = claimById(claimId);
@@ -240,23 +307,27 @@
     const dependents = state.edges
       .filter((e) => e.target === claimId && e.type === "depends_on")
       .map((e) => claimById(e.source));
+
     detailEl.innerHTML = `
       <h2>${escapeHtml(claim.text)}</h2>
-      <p class="hint">
-        ${(claim.tags || []).map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join(" ")}
-        ${claim.context ? `<br /><em>${escapeHtml(claim.context)}</em>` : ""}
-      </p>
+      <div class="tag-row">
+        ${(claim.tags || []).map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join("")}
+      </div>
+      ${claim.context ? `<p class="hint" style="margin-top:4px"><em>${escapeHtml(claim.context)}</em></p>` : ""}
+
       <div class="conf-block">
-        <div class="conf-card">intrinsic
+        <div class="conf-card">
+          <span>Intrinsic</span>
           <strong>${formatConf(conf.intrinsic)}</strong>
-          <span class="hint">from this claim's own evidence only</span>
+          <span class="hint">own evidence only</span>
         </div>
-        <div class="conf-card">final (propagated)
+        <div class="conf-card">
+          <span>Final</span>
           <strong>${formatConf(conf.final)}</strong>
           <span class="hint">${
             conf.prereqs_mean === null
               ? "no prerequisites"
-              : "blend with mean(prereqs) = " + formatConf(conf.prereqs_mean)
+              : "prereqs mean = " + formatConf(conf.prereqs_mean)
           }</span>
         </div>
       </div>
@@ -268,22 +339,22 @@
             (e) => `<li class="${e.direction}">
               <div class="ev-header">
                 <strong>${escapeHtml(e.source)}</strong>
-                <button class="btn-delete" data-delete-evidence="${e.id}">&times;</button>
+                <button class="btn-delete" data-delete-evidence="${e.id}" title="Remove evidence">&times;</button>
               </div>
-              <div class="meta">${e.direction}, strength ${e.strength.toFixed(2)},
-              source quality ${e.source_quality.toFixed(2)}</div>
+              <div class="meta">${e.direction} &middot; strength ${e.strength.toFixed(2)} &middot;
+              quality ${e.source_quality.toFixed(2)}</div>
               ${e.notes ? `<div class="meta">${escapeHtml(e.notes)}</div>` : ""}
             </li>`
           )
           .join("") || `<li class="hint">No evidence yet.</li>`}
       </ul>
 
-      <h3>Direct prerequisites (${directDeps.length})</h3>
+      <h3>Prerequisites (${directDeps.length})</h3>
       <ul class="dep-list">
         ${
           directDeps
             .filter(Boolean)
-            .map((c) => `<li>&rarr; ${escapeHtml(c.text)}</li>`)
+            .map((c) => `<li data-nav-claim="${c.id}">&rarr; ${escapeHtml(c.text)}</li>`)
             .join("") || `<li class="hint">root claim</li>`
         }
       </ul>
@@ -293,7 +364,7 @@
         ${
           dependents
             .filter(Boolean)
-            .map((c) => `<li>&larr; ${escapeHtml(c.text)}</li>`)
+            .map((c) => `<li data-nav-claim="${c.id}">&larr; ${escapeHtml(c.text)}</li>`)
             .join("") || `<li class="hint">no claim depends on this</li>`
         }
       </ul>
@@ -305,6 +376,8 @@
         <button class="btn-delete-claim" data-delete-claim="${claimId}">Delete this claim</button>
       </div>
     `;
+
+    // Wire delete evidence buttons
     detailEl.querySelectorAll(".btn-delete[data-delete-evidence]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const evId = btn.dataset.deleteEvidence;
@@ -317,6 +390,8 @@
         }
       });
     });
+
+    // Wire delete claim button
     const delClaimBtn = detailEl.querySelector(".btn-delete-claim");
     if (delClaimBtn) {
       delClaimBtn.addEventListener("click", async () => {
@@ -331,6 +406,23 @@
         }
       });
     }
+
+    // Wire navigable dependency links
+    detailEl.querySelectorAll("[data-nav-claim]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const navId = el.dataset.navClaim;
+        cy.nodes().removeClass("selected");
+        const node = cy.getElementById(navId);
+        if (node.length) {
+          node.addClass("selected");
+          cy.animate({ center: { eles: node }, duration: 300 });
+        }
+        state.selectedClaim = navId;
+        renderClaimDetail(navId);
+      });
+    });
+
+    // Load reasoning paths
     api(`/paths/${claimId}`)
       .then((data) => {
         const area = document.getElementById("paths-area");
@@ -353,21 +445,12 @@
       .catch((err) => showMessage(err.message, "error"));
   }
 
-  function formatConf(v) {
-    if (v === null || v === undefined) return "n/a";
-    const sign = v >= 0 ? "+" : "";
-    return sign + v.toFixed(2);
-  }
-
-  function escapeHtml(s) {
-    return String(s || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-  }
+  // ---------- Form dropdowns ------------------------------------------- //
 
   function refreshFormDropdowns() {
-    for (const sel of document.querySelectorAll("select[name='claim_id'], select[name='source'], select[name='target']")) {
+    for (const sel of document.querySelectorAll(
+      "select[name='claim_id'], select[name='source'], select[name='target']"
+    )) {
       const cur = sel.value;
       sel.innerHTML = state.claims
         .map((c) => `<option value="${c.id}">${escapeHtml(shortLabel(c.text))}</option>`)
@@ -376,7 +459,52 @@
     }
   }
 
+  // ---------- Search --------------------------------------------------- //
+
+  function handleSearch() {
+    const query = searchInput.value.trim().toLowerCase();
+    if (!query) {
+      cy.nodes().removeClass("search-dim");
+      cy.edges().removeClass("search-dim");
+      return;
+    }
+    cy.nodes().forEach((node) => {
+      const text = (node.data("full") || "").toLowerCase();
+      if (text.includes(query)) {
+        node.removeClass("search-dim");
+      } else {
+        node.addClass("search-dim");
+      }
+    });
+    cy.edges().forEach((edge) => {
+      const src = edge.source();
+      const tgt = edge.target();
+      if (src.hasClass("search-dim") && tgt.hasClass("search-dim")) {
+        edge.addClass("search-dim");
+      } else {
+        edge.removeClass("search-dim");
+      }
+    });
+  }
+
+  // ---------- Tooltip -------------------------------------------------- //
+
+  function showTooltip(x, y, html) {
+    tooltipEl.innerHTML = html;
+    tooltipEl.classList.remove("hidden");
+    const rect = tooltipEl.getBoundingClientRect();
+    const px = Math.min(x + 12, window.innerWidth - rect.width - 12);
+    const py = Math.min(y + 12, window.innerHeight - rect.height - 12);
+    tooltipEl.style.left = px + "px";
+    tooltipEl.style.top = py + "px";
+  }
+
+  function hideTooltip() {
+    tooltipEl.classList.add("hidden");
+  }
+
   // ---------- Form handlers ------------------------------------------- //
+
   document.getElementById("form-claim").addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -435,11 +563,14 @@
     }
   });
 
+  // ---------- Header buttons ------------------------------------------ //
+
   document.getElementById("btn-load").addEventListener("click", async () => {
     const name = datasetSelect.value;
     try {
       const data = await api(`/load/${name}`, { method: "POST" });
       showMessage(`Loaded dataset: ${name}`);
+      state.selectedClaim = null;
       await refreshGraph(data);
     } catch (err) {
       showMessage(err.message, "error");
@@ -498,6 +629,47 @@
     }
   });
 
+  // ---------- Graph toolbar ------------------------------------------- //
+
+  document.getElementById("btn-zoom-in").addEventListener("click", () => {
+    cy.zoom({ level: cy.zoom() * 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+  });
+
+  document.getElementById("btn-zoom-out").addEventListener("click", () => {
+    cy.zoom({ level: cy.zoom() / 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+  });
+
+  document.getElementById("btn-fit").addEventListener("click", () => {
+    cy.fit(50);
+  });
+
+  document.getElementById("btn-layout-tb").addEventListener("click", () => {
+    currentLayout = "TB";
+    document.getElementById("btn-layout-tb").classList.add("active");
+    document.getElementById("btn-layout-lr").classList.remove("active");
+    runLayout();
+  });
+
+  document.getElementById("btn-layout-lr").addEventListener("click", () => {
+    currentLayout = "LR";
+    document.getElementById("btn-layout-lr").classList.add("active");
+    document.getElementById("btn-layout-tb").classList.remove("active");
+    runLayout();
+  });
+
+  // ---------- Search handler ------------------------------------------ //
+
+  searchInput.addEventListener("input", handleSearch);
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      searchInput.value = "";
+      handleSearch();
+      searchInput.blur();
+    }
+  });
+
+  // ---------- Cytoscape events ---------------------------------------- //
+
   cy.on("tap", "node", (evt) => {
     cy.nodes().removeClass("selected highlight-topo highlight-path");
     cy.edges().removeClass("highlight-path");
@@ -511,12 +683,57 @@
       state.selectedClaim = null;
       cy.nodes().removeClass("selected highlight-topo highlight-path");
       cy.edges().removeClass("highlight-path");
-      detailEl.innerHTML = `<h2>Select a claim</h2>
-        <p class="hint">Click any node in the graph.</p>`;
+      renderOverview();
+    }
+  });
+
+  cy.on("mouseover", "node", (evt) => {
+    const node = evt.target;
+    const conf = state.confidence[node.id()] || { final: 0 };
+    const evCount = state.evidence.filter((e) => e.claim_id === node.id()).length;
+    const pos = evt.renderedPosition || evt.position;
+    const container = document.getElementById("cy").getBoundingClientRect();
+    showTooltip(
+      container.left + pos.x,
+      container.top + pos.y,
+      `<div class="tt-label">${escapeHtml(node.data("full"))}</div>
+       <div class="tt-conf">Confidence: ${formatConf(conf.final)}</div>
+       <div class="tt-meta">${evCount} evidence item${evCount !== 1 ? "s" : ""}</div>`
+    );
+  });
+
+  cy.on("mouseout", "node", hideTooltip);
+  cy.on("mouseover", "edge", (evt) => {
+    const edge = evt.target;
+    const pos = evt.renderedPosition || evt.position;
+    const container = document.getElementById("cy").getBoundingClientRect();
+    showTooltip(
+      container.left + pos.x,
+      container.top + pos.y,
+      `<div class="tt-label">${edge.data("type")}</div>
+       <div class="tt-meta">${escapeHtml(claimById(edge.data("source"))?.text || edge.data("source"))}<br>&rarr; ${escapeHtml(claimById(edge.data("target"))?.text || edge.data("target"))}</div>`
+    );
+  });
+  cy.on("mouseout", "edge", hideTooltip);
+
+  // ---------- Keyboard shortcuts -------------------------------------- //
+
+  document.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+    if (e.key === "/" || e.key === "f" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      searchInput.focus();
+    }
+    if (e.key === "Escape") {
+      state.selectedClaim = null;
+      cy.nodes().removeClass("selected highlight-topo highlight-path");
+      cy.edges().removeClass("highlight-path");
+      renderOverview();
     }
   });
 
   // ---------- Boot ---------------------------------------------------- //
+
   (async () => {
     try {
       await loadDatasetList();

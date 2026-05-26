@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ClaimGraph</title>
+  <title>ClaimGraph &mdash; Knowledge as a DAG</title>
+  <meta name="description" content="Visualize knowledge as a DAG of claims and evidence with confidence propagated in topological order." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='28' font-size='28'>🔗</text></svg>" />
   <link rel="stylesheet" href="/style.css" />
   <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
   <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
@@ -12,27 +14,57 @@
 <body>
   <header>
     <div class="brand">
-      <h1>ClaimGraph</h1>
+      <h1><span class="logo-icon">&#9670;</span> ClaimGraph</h1>
       <p class="tagline">
-        a DAG of claims and evidence &mdash; confidence propagated in
+        Knowledge as a <strong>DAG</strong> &mdash; confidence propagated in
         <strong>topological order</strong>
       </p>
     </div>
     <div class="controls">
-      <label>
-        Dataset:
-        <select id="dataset-select"></select>
-      </label>
-      <button id="btn-load">Load</button>
-      <button id="btn-reset" class="ghost">Reset</button>
-      <button id="btn-topo" class="ghost">Show topo order</button>
-      <button id="btn-longest" class="ghost">Longest reasoning chain</button>
+      <div class="control-group">
+        <label class="inline">
+          Dataset
+          <select id="dataset-select"></select>
+        </label>
+        <button id="btn-load">Load</button>
+        <button id="btn-reset" class="ghost">Reset</button>
+      </div>
+      <div class="control-group">
+        <button id="btn-topo" class="ghost" title="Animate topological order on nodes">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>
+          Topo order
+        </button>
+        <button id="btn-longest" class="ghost" title="Show the longest reasoning chain to the selected claim">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>
+          Longest chain
+        </button>
+      </div>
     </div>
   </header>
 
   <main>
     <section id="graph-area">
       <div id="cy"></div>
+
+      <div id="graph-toolbar">
+        <button id="btn-zoom-in" class="toolbar-btn" title="Zoom in">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/></svg>
+        </button>
+        <button id="btn-zoom-out" class="toolbar-btn" title="Zoom out">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35M8 11h6"/></svg>
+        </button>
+        <button id="btn-fit" class="toolbar-btn" title="Fit graph to viewport">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+        </button>
+        <div class="toolbar-sep"></div>
+        <button id="btn-layout-tb" class="toolbar-btn active" title="Top-to-bottom layout">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M5 12l7 7 7-7"/></svg>
+        </button>
+        <button id="btn-layout-lr" class="toolbar-btn" title="Left-to-right layout">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M12 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+
       <div id="legend">
         <h3>Edges</h3>
         <ul>
@@ -40,73 +72,96 @@
           <li><span class="swatch sup"></span>supports</li>
           <li><span class="swatch con"></span>contradicts</li>
         </ul>
-        <h3>Node colour</h3>
+        <h3>Node colour = confidence</h3>
         <div id="confidence-bar">
-          <span>-1</span>
+          <span>&minus;1</span>
           <div class="bar"></div>
           <span>+1</span>
         </div>
-        <p class="hint">Hover edges &amp; nodes for details. Click a claim for the side panel.</p>
+      </div>
+
+      <div id="search-box">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input id="search-input" type="text" placeholder="Search claims..." />
       </div>
     </section>
 
     <aside id="panel">
+      <section id="stats-bar">
+        <div class="stat"><span id="stat-claims">0</span> claims</div>
+        <div class="stat"><span id="stat-edges">0</span> edges</div>
+        <div class="stat"><span id="stat-evidence">0</span> evidence</div>
+      </section>
+
       <section id="claim-detail">
         <h2>Select a claim</h2>
-        <p class="hint">Click any node in the graph.</p>
+        <p class="hint">Click any node in the graph to inspect it.</p>
       </section>
 
       <section id="add-forms">
         <details>
-          <summary>+ Add claim</summary>
+          <summary>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            Add claim
+          </summary>
           <form id="form-claim">
-            <label>ID <input name="id" placeholder="(auto)" /></label>
-            <label>Text <textarea name="text" required></textarea></label>
-            <label>Tags (comma-separated) <input name="tags" /></label>
-            <label>Context <input name="context" /></label>
+            <label>ID <input name="id" placeholder="(auto-generated)" /></label>
+            <label>Claim text <textarea name="text" required placeholder="Enter the claim statement..."></textarea></label>
+            <label>Tags <input name="tags" placeholder="comma-separated, e.g. health, meta-analysis" /></label>
+            <label>Context <input name="context" placeholder="Optional context or scope" /></label>
             <button type="submit">Add claim</button>
           </form>
         </details>
 
         <details>
-          <summary>+ Add evidence</summary>
+          <summary>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15h6"/></svg>
+            Add evidence
+          </summary>
           <form id="form-evidence">
             <label>Claim <select name="claim_id" required></select></label>
-            <label>Source <input name="source" required /></label>
+            <label>Source <input name="source" required placeholder="e.g. Smith et al. 2023" /></label>
             <label>Direction
               <select name="direction">
                 <option value="supports">supports</option>
                 <option value="contradicts">contradicts</option>
               </select>
             </label>
-            <label>Strength
-              <input name="strength" type="number" min="0" max="1" step="0.05" value="0.5" />
-            </label>
-            <label>Source quality
-              <input name="source_quality" type="number" min="0" max="1" step="0.05" value="0.5" />
-            </label>
-            <label>Notes <input name="notes" /></label>
+            <div class="form-row">
+              <label>Strength
+                <input name="strength" type="number" min="0" max="1" step="0.05" value="0.5" />
+              </label>
+              <label>Source quality
+                <input name="source_quality" type="number" min="0" max="1" step="0.05" value="0.5" />
+              </label>
+            </div>
+            <label>Notes <input name="notes" placeholder="Optional notes" /></label>
             <button type="submit">Add evidence</button>
           </form>
         </details>
 
         <details>
-          <summary>+ Add edge</summary>
+          <summary>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            Add edge
+          </summary>
           <form id="form-edge">
             <label>Source claim <select name="source" required></select></label>
             <label>Target claim <select name="target" required></select></label>
-            <label>Type
-              <select name="type">
-                <option value="depends_on">depends_on</option>
-                <option value="supports">supports</option>
-                <option value="contradicts">contradicts</option>
-              </select>
-            </label>
-            <label>Weight
-              <input name="weight" type="number" min="0" max="2" step="0.1" value="1.0" />
-            </label>
+            <div class="form-row">
+              <label>Type
+                <select name="type">
+                  <option value="depends_on">depends_on</option>
+                  <option value="supports">supports</option>
+                  <option value="contradicts">contradicts</option>
+                </select>
+              </label>
+              <label>Weight
+                <input name="weight" type="number" min="0" max="2" step="0.1" value="1.0" />
+              </label>
+            </div>
             <button type="submit">Add edge</button>
-            <p class="hint">depends_on edges are validated against the DAG &mdash; cycles are rejected.</p>
+            <p class="hint">depends_on edges are validated &mdash; cycles are rejected.</p>
           </form>
         </details>
       </section>
@@ -114,6 +169,8 @@
       <section id="messages"></section>
     </aside>
   </main>
+
+  <div id="tooltip" class="tooltip hidden"></div>
 
   <script src="/app.js"></script>
 </body>
