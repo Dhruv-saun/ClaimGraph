@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: claimgraph
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn wsgi:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: CLAIMGRAPH_DATASET
+        value: remote_work
