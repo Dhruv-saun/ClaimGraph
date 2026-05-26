@@ -16,20 +16,25 @@
       {
         selector: "node",
         style: {
+          "shape": "roundrectangle",
           "label": "data(short)",
           "text-wrap": "wrap",
-          "text-max-width": 180,
+          "text-max-width": 140,
           "font-size": 11,
           "color": "#0b1020",
           "background-color": "data(color)",
           "border-color": "#0b1020",
           "border-width": 1,
-          "width": 70,
-          "height": 70,
+          "width": "label",
+          "height": "label",
           "text-valign": "center",
           "text-halign": "center",
-          "padding": "8px",
+          "padding": "14px",
         },
+      },
+      {
+        selector: "node.selected",
+        style: { "border-color": "#5b9cff", "border-width": 3 },
       },
       {
         selector: "node.highlight-topo",
@@ -220,7 +225,8 @@
     }));
     cy.elements().remove();
     cy.add([...nodes, ...edges]);
-    cy.layout({ name: "dagre", rankDir: "LR", nodeSep: 30, rankSep: 80 }).run();
+    cy.layout({ name: "dagre", rankDir: "TB", nodeSep: 50, rankSep: 70 }).run();
+    cy.fit(40);
   }
 
   function renderClaimDetail(claimId) {
@@ -260,7 +266,10 @@
         ${evs
           .map(
             (e) => `<li class="${e.direction}">
-              <strong>${escapeHtml(e.source)}</strong>
+              <div class="ev-header">
+                <strong>${escapeHtml(e.source)}</strong>
+                <button class="btn-delete" data-delete-evidence="${e.id}">&times;</button>
+              </div>
               <div class="meta">${e.direction}, strength ${e.strength.toFixed(2)},
               source quality ${e.source_quality.toFixed(2)}</div>
               ${e.notes ? `<div class="meta">${escapeHtml(e.notes)}</div>` : ""}
@@ -291,7 +300,37 @@
 
       <h3>Reasoning paths</h3>
       <div id="paths-area"><p class="hint">Loading paths&hellip;</p></div>
+
+      <div class="claim-actions">
+        <button class="btn-delete-claim" data-delete-claim="${claimId}">Delete this claim</button>
+      </div>
     `;
+    detailEl.querySelectorAll(".btn-delete[data-delete-evidence]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const evId = btn.dataset.deleteEvidence;
+        try {
+          await api(`/evidence/${evId}`, { method: "DELETE" });
+          showMessage("Evidence removed");
+          await refreshGraph();
+        } catch (err) {
+          showMessage(err.message, "error");
+        }
+      });
+    });
+    const delClaimBtn = detailEl.querySelector(".btn-delete-claim");
+    if (delClaimBtn) {
+      delClaimBtn.addEventListener("click", async () => {
+        const id = delClaimBtn.dataset.deleteClaim;
+        try {
+          await api(`/claims/${id}`, { method: "DELETE" });
+          showMessage("Claim removed");
+          state.selectedClaim = null;
+          await refreshGraph();
+        } catch (err) {
+          showMessage(err.message, "error");
+        }
+      });
+    }
     api(`/paths/${claimId}`)
       .then((data) => {
         const area = document.getElementById("paths-area");
@@ -392,8 +431,7 @@
       showMessage("Edge added");
       await refreshGraph();
     } catch (err) {
-      const tag = err.message.includes("cycle") ? "error" : "error";
-      showMessage(err.message, tag);
+      showMessage(err.message, "error");
     }
   });
 
@@ -420,7 +458,7 @@
   });
 
   document.getElementById("btn-topo").addEventListener("click", () => {
-    cy.nodes().removeClass("highlight-topo highlight-path");
+    cy.nodes().removeClass("selected highlight-topo highlight-path");
     cy.edges().removeClass("highlight-path");
     state.topo.forEach((id, i) => {
       setTimeout(() => {
@@ -441,7 +479,7 @@
     }
     try {
       const data = await api(`/longest-path/${state.selectedClaim}`);
-      cy.nodes().removeClass("highlight-topo highlight-path");
+      cy.nodes().removeClass("selected highlight-topo highlight-path");
       cy.edges().removeClass("highlight-path");
       data.path.forEach((id) => cy.getElementById(id).addClass("highlight-path"));
       for (let i = 1; i < data.path.length; i++) {
@@ -461,17 +499,20 @@
   });
 
   cy.on("tap", "node", (evt) => {
-    state.selectedClaim = evt.target.id();
-    cy.nodes().removeClass("highlight-topo highlight-path");
+    cy.nodes().removeClass("selected highlight-topo highlight-path");
     cy.edges().removeClass("highlight-path");
+    state.selectedClaim = evt.target.id();
+    evt.target.addClass("selected");
     renderClaimDetail(state.selectedClaim);
   });
 
   cy.on("tap", (evt) => {
     if (evt.target === cy) {
       state.selectedClaim = null;
-      cy.nodes().removeClass("highlight-topo highlight-path");
+      cy.nodes().removeClass("selected highlight-topo highlight-path");
       cy.edges().removeClass("highlight-path");
+      detailEl.innerHTML = `<h2>Select a claim</h2>
+        <p class="hint">Click any node in the graph.</p>`;
     }
   });
 
